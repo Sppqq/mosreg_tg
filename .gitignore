@@ -1,3 +1,5 @@
 cookies.json
 .env
 __pycache__/
+*.pkl
+mosreg-token-helper/
