@@ -15,45 +15,63 @@ from webdriver_manager.chrome import ChromeDriverManager
 load_dotenv()
 
 class MosregSchedule:
-    def __init__(self, headless=False, cookies_file="cookies.json"):  # Добавлен параметр для файла с куками
+    def __init__(self, headless=False, cookies_file="cookies.json", browser=None):  # Добавлен параметр browser
         """
         Инициализация класса для получения расписания из МЭШ
         :param headless: Запуск браузера в фоновом режиме (без графического интерфейса)
         :param cookies_file: Путь к файлу с куками
+        :param browser: Уже созданный экземпляр браузера Chrome
         """
-        # Проверка наличия файла с куками
-        if not os.path.exists(cookies_file):
-            raise ValueError(f"Файл с куками '{cookies_file}' не найден")
-        
+        # Если браузер уже предоставлен, cookies_file может быть необязательным
         self.cookies_file = cookies_file
         
-        # Настройка опций Chrome
-        chrome_options = Options()
-        if headless:
-            chrome_options.add_argument("--headless=new")  # Новый параметр для Chrome
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument("--disable-infobars")
+        if browser:
+            # Используем уже созданный браузер
+            print("Используем предоставленный экземпляр браузера")
+            self.driver = browser
+            
+            # Проверяем, авторизован ли уже браузер, проверив URL 
+            current_url = self.driver.current_url
+            print(f"Текущий URL браузера: {current_url}")
+            
+            # Если авторизованы и уже находимся в расписании, пропускаем авторизацию
+            if "school.mosreg.ru" in current_url:
+                print("Браузер уже авторизован в системе, пропускаем авторизацию")
+                return
+        else:
+            # Проверка наличия файла с куками
+            if not os.path.exists(cookies_file):
+                raise ValueError(f"Файл с куками '{cookies_file}' не найден")
+                
+            # Настройка опций Chrome
+            chrome_options = Options()
+            if headless:
+                chrome_options.add_argument("--headless=new")  # Новый параметр для Chrome
+            chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--disable-extensions")
+            chrome_options.add_argument("--disable-notifications")
+            chrome_options.add_argument("--disable-infobars")
+            
+            # Дополнительные заголовки
+            chrome_options.add_argument(f"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+            
+            # Инициализация драйвера Chrome
+            print("Запуск браузера Chrome...")
+            self.driver = webdriver.Chrome(
+                service=Service(ChromeDriverManager().install()),
+                options=chrome_options
+            )
+            
+            # Устанавливаем размер окна
+            self.driver.set_window_size(1920, 1080)
         
-        # Дополнительные заголовки
-        chrome_options.add_argument(f"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        
-        # Инициализация драйвера Chrome
-        print("Запуск браузера Chrome...")
-        self.driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()),
-            options=chrome_options
-        )
-        
-        # Устанавливаем размер окна
-        self.driver.set_window_size(1920, 1080)
-        
-        print("Загрузка куки и авторизация...")
-        self.login_with_cookies()
+        # Проверяем авторизацию только если не пропустили её выше
+        if not (browser and "school.mosreg.ru" in self.driver.current_url):
+            print("Загрузка куки и авторизация...")
+            self.login_with_cookies()
     
     def login_with_cookies(self):
         """

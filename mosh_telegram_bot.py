@@ -75,13 +75,38 @@ async def get_scheduler():
         # Создаем новый экземпляр в отдельном потоке
         def create_scheduler():
             try:
-                # ВАЖНО: Для оптимизации класса MosregSchedule нужно внести следующие изменения:
-                # 1. Добавить параметр direct_navigation в конструктор класса
-                # 2. Если direct_navigation=True, не переходить на страницу расписания при инициализации
-                # 3. Модифицировать метод get_schedule, чтобы он принимал параметр direct_date_navigation
-                # 4. Реализовать прямой переход на URL с нужной датой, например:
-                #    url = f"https://school.mosreg.ru/schedules/day?date={date_str}"
-                return MosregSchedule(headless=True)
+                # Добавляем явную установку для Chrome и ChromeDriver
+                from webdriver_manager.chrome import ChromeDriverManager
+                from selenium import webdriver
+                from selenium.webdriver.chrome.service import Service
+
+                # Настройка опций Chrome
+                chrome_options = webdriver.ChromeOptions()
+                if True:  # headless=True по умолчанию
+                    chrome_options.add_argument('--headless')
+                chrome_options.add_argument('--no-sandbox')
+                chrome_options.add_argument('--disable-dev-shm-usage')
+                chrome_options.add_argument('--disable-gpu')
+                chrome_options.add_argument('--window-size=1920,1080')
+                
+                try:
+                    # Попытка использовать ChromeDriverManager
+                    service = Service(executable_path=ChromeDriverManager().install())
+                    browser = webdriver.Chrome(service=service, options=chrome_options)
+                    logger.info("ChromeDriver успешно запущен через ChromeDriverManager")
+                except Exception as driver_err:
+                    logger.error(f"Ошибка при установке через ChromeDriverManager: {driver_err}")
+                    # Резервный вариант - использовать локальный ChromeDriver или systemный Chrome
+                    try:
+                        # Пробуем использовать Chrome напрямую, если он установлен в системе
+                        browser = webdriver.Chrome(options=chrome_options)
+                        logger.info("Chrome запущен через системный браузер")
+                    except Exception as sys_err:
+                        logger.error(f"Не удалось запустить Chrome: {sys_err}")
+                        return None
+                        
+                # Инициализируем MosregSchedule с запущенным браузером
+                return MosregSchedule(browser=browser)
             except Exception as e:
                 logger.error(f"Ошибка при создании экземпляра планировщика: {e}")
                 return None
@@ -128,7 +153,8 @@ async def get_schedule(date=None, force_refresh=False):
         if date in schedule_cache:
             logger.info(f"Используем устаревшее кешированное расписание для {date}")
             return schedule_cache[date]['data']
-        return None
+        logger.warning(f"Нет кешированного расписания для {date}, возвращаем пустой список")
+        return []  # Возвращаем пустой список вместо None, чтобы избежать ошибок
     
     # Преобразуем дату в формат, необходимый для URL (если требуется)
     day, month, year = date.split('-')
@@ -137,30 +163,37 @@ async def get_schedule(date=None, force_refresh=False):
     # Используем ThreadPoolExecutor для запуска блокирующего кода в отдельном потоке
     def get_schedule_blocking():
         try:
-            # ВАЖНО: Для оптимизации метода get_schedule в классе MosregSchedule:
-            # 1. Добавить параметр direct_date_navigation, который по умолчанию False
-            # 2. Если direct_date_navigation=True, использовать прямой URL с датой
-            # Пример реализации:
-            # if direct_date_navigation:
-            #     day, month, year = date.split('-')
-            #     date_param = f"{day}.{month}.{year}"
-            #     driver.get(f"https://school.mosreg.ru/schedules/day?date={date_param}")
-            # else:
-            #     ... текущая логика выбора даты через UI ...
+            # Добавляем диагностические сообщения
+            logger.info(f"Получаем расписание на {formatted_date} через Selenium")
+            # Сначала пробуем получить из кэша браузера (если уже загружался этот день)
+            lessons = None
             
-            # Сейчас используем существующий метод, который не имеет этой оптимизации
-            lessons = scheduler.get_schedule(date)
+            try:
+                lessons = scheduler.get_schedule(date)
+                logger.info(f"Успешно получено расписание на {formatted_date}")
+                
+                # Проверяем, что в расписании действительно есть уроки
+                if not lessons:
+                    logger.warning(f"Получен пустой список уроков на {formatted_date}")
+                elif isinstance(lessons, list):
+                    logger.info(f"Получено {len(lessons)} уроков на {formatted_date}")
+                    for i, lesson in enumerate(lessons[:3], 1):  # Выводим первые 3 урока для проверки
+                        logger.info(f"Урок {i}: {lesson.get('subject', 'Без названия')}")
+            except Exception as e:
+                logger.error(f"Ошибка при получении расписания через стандартный метод: {e}")
+                lessons = []  # Возвращаем пустой список вместо None
+            
             return lessons
         except Exception as e:
-            logger.error(f"Ошибка при получении расписания: {e}")
-            return None
+            logger.error(f"Глобальная ошибка при получении расписания: {e}")
+            return []  # Возвращаем пустой список вместо None
     
     # Запускаем блокирующий код в отдельном потоке с таймаутом
     try:
-        # Устанавливаем таймаут в 20 секунд для запроса
+        # Увеличиваем таймаут до 30 секунд для запроса
         lessons = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(thread_pool, get_schedule_blocking),
-            timeout=20
+            timeout=30
         )
     except asyncio.TimeoutError:
         logger.error(f"Таймаут при получении расписания для {date}")
@@ -168,12 +201,12 @@ async def get_schedule(date=None, force_refresh=False):
         if date in schedule_cache:
             logger.info(f"Используем устаревшее кешированное расписание для {date}")
             return schedule_cache[date]['data']
-        return None
+        return []  # Возвращаем пустой список вместо None
     except Exception as e:
         logger.error(f"Необработанное исключение при получении расписания: {e}")
         if date in schedule_cache:
             return schedule_cache[date]['data']
-        return None
+        return []  # Возвращаем пустой список вместо None
     
     # Сохраняем результат в кэш
     if lessons is not None:
@@ -197,6 +230,11 @@ async def get_schedule(date=None, force_refresh=False):
                 pickle.dump(schedule_cache, f)
         except Exception as e:
             logger.error(f"Ошибка при сохранении кэша: {e}")
+    
+    # Если мы получили пустой список, но в кеше есть данные для этой даты, используем их
+    if not lessons and date in schedule_cache:
+        logger.info(f"Получен пустой список уроков, используем кеш для {date}")
+        return schedule_cache[date]['data']
             
     return lessons
 
